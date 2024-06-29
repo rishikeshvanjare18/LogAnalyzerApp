@@ -28,7 +28,6 @@ import javax.swing.JPanel;
 import javax.swing.JProgressBar;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
-import javax.swing.UIManager;
 
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -37,6 +36,7 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 public class LogAnalyzerApp extends JFrame {
 
+	private static final long serialVersionUID = 824575624004827705L;
 	private JProgressBar progressBar;
 	private JTextField logPatternField;
 	private JTextField timestampPatternField;
@@ -52,10 +52,11 @@ public class LogAnalyzerApp extends JFrame {
 		progressBar.setStringPainted(true);
 
 		JLabel logPatternLabel = new JLabel("Log Pattern (Regex):");
-		logPatternField = new JTextField("^(ERROR) \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2} .*", 40);
+		logPatternField = new JTextField("^(ERROR) .*", 40);
 
 		JLabel timestampPatternLabel = new JLabel("Timestamp Pattern (Regex):");
-		timestampPatternField = new JTextField("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}", 40);
+		timestampPatternField = new JTextField(
+				"ERROR \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2},\\d{3} \\[Webcontainer:\\d+\\]", 60);
 
 		JButton analyzeButton = new JButton("Analyze Log File");
 		analyzeButton.addActionListener(e -> new Thread(this::analyzeLogFile).start());
@@ -104,8 +105,8 @@ public class LogAnalyzerApp extends JFrame {
 	private void showHelpDialog() {
 		String helpMessage = "Instructions:\n\n"
 				+ "1. Define the log pattern and timestamp pattern using regular expressions.\n"
-				+ "   - Default log pattern: ^(ERROR) \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2} .*\n"
-				+ "   - Default timestamp pattern: \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\n"
+				+ "   - Default log pattern: ^(ERROR) .* \n"
+				+ "   - Default timestamp pattern: ERROR \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2},\\d{3} \\[Webcontainer:\\d+\\]\n"
 				+ "2. Click 'Analyze Log File' and select the log file you want to analyze.\n"
 				+ "3. The progress bar will indicate the analysis progress.\n"
 				+ "4. Once the analysis is complete, an Excel report will be generated and saved to the desktop in a 'logs' folder with a unique filename based on the current timestamp.\n"
@@ -122,7 +123,6 @@ public class LogAnalyzerApp extends JFrame {
 				String filename = fileChooser.getSelectedFile().getAbsolutePath();
 				Map<String, Integer> exceptionCounts = new HashMap<>();
 				Pattern logPattern = Pattern.compile(logPatternField.getText());
-				Pattern timestampPattern = Pattern.compile(timestampPatternField.getText());
 
 				BufferedReader reader = new BufferedReader(new FileReader(filename));
 				String line;
@@ -131,8 +131,9 @@ public class LogAnalyzerApp extends JFrame {
 
 				// Count total lines for progress calculation
 				int totalLines = 0;
-				while (reader.readLine() != null)
+				while (reader.readLine() != null) {
 					totalLines++;
+				}
 				reader.close();
 
 				reader = new BufferedReader(new FileReader(filename));
@@ -143,29 +144,32 @@ public class LogAnalyzerApp extends JFrame {
 					processedLines++;
 					int progress = (int) ((processedLines / (double) totalLines) * 100);
 					SwingUtilities.invokeLater(() -> progressBar.setValue(progress));
+
 					// Check for ERROR level followed by date and time
 					Matcher matcher = logPattern.matcher(line);
 					if (matcher.matches()) {
 						// Start of a new ERROR log
 						if (inException) {
 							// Process previous exception
-							processException(currentException.toString(), exceptionCounts, timestampPattern);
+							processException(currentException.toString(), exceptionCounts,
+									timestampPatternField.getText());
 							currentException.setLength(0);
 						}
 						currentException.append(line).append("\n");
 						inException = true;
+					} else if (line.startsWith("DEBUG") || line.startsWith("WARN") || line.startsWith("INFO")
+							|| line.startsWith("TRACE")) {
+						// Ignore non-ERROR logs
+						inException = false;
 					} else if (inException) {
 						// Continue current exception
 						currentException.append(line).append("\n");
-					} else {
-						// Ignore non-ERROR logs
-						inException = false;
 					}
 				}
 
 				// Process the last exception, if any
 				if (inException) {
-					processException(currentException.toString(), exceptionCounts, timestampPattern);
+					processException(currentException.toString(), exceptionCounts, timestampPatternField.getText());
 				}
 
 				reader.close();
@@ -183,20 +187,10 @@ public class LogAnalyzerApp extends JFrame {
 		}
 	}
 
-	private void processException(String exceptionText, Map<String, Integer> exceptionCounts,
-			Pattern timestampPattern) {
-		StringBuilder fullException = new StringBuilder();
-		String[] lines = exceptionText.split("\n");
-
-		// Start capturing from the first line of the exception
-		for (String line : lines) {
-			if (line.trim().startsWith("at ") || line.trim().startsWith("Caused by:") || line.startsWith("ERROR")) {
-				fullException.append(line.trim()).append("\n");
-			}
-		}
-
-		// Remove timestamp and consider the remaining part
-		String logWithoutTimestamp = timestampPattern.matcher(fullException.toString()).replaceAll("").trim();
+	private void processException(String exceptionText, Map<String, Integer> exceptionCounts, String timestampPattern) {
+		Pattern pattern = Pattern.compile(timestampPattern);
+		Matcher matcher = pattern.matcher(exceptionText);
+		String logWithoutTimestamp = matcher.replaceAll("ERROR").trim();
 		exceptionCounts.put(logWithoutTimestamp, exceptionCounts.getOrDefault(logWithoutTimestamp, 0) + 1);
 	}
 
@@ -207,9 +201,9 @@ public class LogAnalyzerApp extends JFrame {
 		// Create header row
 		Row headerRow = sheet.createRow(0);
 		headerRow.createCell(0).setCellValue("Exception");
-		headerRow.createCell(1).setCellValue("Occurrences");
+		headerRow.createCell(1).setCellValue("Count");
 
-		// Populate data
+		// Populate data rows
 		int rowNum = 1;
 		for (Map.Entry<String, Integer> entry : exceptionCounts.entrySet()) {
 			Row row = sheet.createRow(rowNum++);
@@ -217,31 +211,28 @@ public class LogAnalyzerApp extends JFrame {
 			row.createCell(1).setCellValue(entry.getValue());
 		}
 
-		// Determine file path
-		String desktopPath = System.getProperty("user.home") + "/Desktop";
-		String logsFolderPath = desktopPath + "/logs";
-		String currentDate = new SimpleDateFormat("yyyy-MM-dd_HH-mm-ss").format(new Date());
-		String reportFileName = logsFolderPath + "/ExceptionReport_" + currentDate + ".xlsx";
-
+		// Save the Excel file
 		try {
-			// Create logs folder if it doesn't exist
-			Path logsFolder = Paths.get(logsFolderPath);
-			if (!Files.exists(logsFolder)) {
-				Files.createDirectory(logsFolder);
-			}
-
-			// Write workbook to file
-			try (FileOutputStream outputStream = new FileOutputStream(reportFileName)) {
-				workbook.write(outputStream);
-				workbook.close();
-			}
-
-			JOptionPane.showMessageDialog(this, "Excel report generated successfully: " + reportFileName,
-					"Report Generated", JOptionPane.INFORMATION_MESSAGE);
-
-		} catch (IOException ex) {
-			JOptionPane.showMessageDialog(this, "Error generating Excel report: " + ex.getMessage(), "Error",
+			Path logsDir = Paths.get(System.getProperty("user.home"), "Desktop", "logs");
+			Files.createDirectories(logsDir);
+			String timestamp = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
+			Path excelFile = logsDir.resolve("ExceptionReport_" + timestamp + ".xlsx");
+			FileOutputStream fileOut = new FileOutputStream(excelFile.toFile());
+			workbook.write(fileOut);
+			fileOut.close();
+			workbook.close();
+			JOptionPane.showMessageDialog(this, "Excel report generated: " + excelFile.toString(), "Success",
+					JOptionPane.INFORMATION_MESSAGE);
+		} catch (IOException e) {
+			JOptionPane.showMessageDialog(this, "Error saving Excel report: " + e.getMessage(), "Error",
 					JOptionPane.ERROR_MESSAGE);
 		}
 	}
+
+//	public static void main(String[] args) {
+//		SwingUtilities.invokeLater(() -> {
+//			LogAnalyzerApp app = new LogAnalyzerApp();
+//			app.setVisible(true);
+//		});
+//	}
 }
