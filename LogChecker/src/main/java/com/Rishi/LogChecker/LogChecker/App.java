@@ -17,8 +17,8 @@ public class App {
 				ex.printStackTrace();
 			}
 
-			LogAnalyzerApp app = new LogAnalyzerApp();
-			app.setVisible(true);
+			LogAnalyzerApp logAnalyzerApp = new LogAnalyzerApp();
+			logAnalyzerApp.setVisible(true);
 		});
-	}	
+	}
 }
